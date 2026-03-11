@@ -1,0 +1,5 @@
+This is a dummy file for testing the parallel download infrastructure.
+It contains enough text to be retrieved in fragments.
+Line 3.
+Line 4.
+Line 5.
