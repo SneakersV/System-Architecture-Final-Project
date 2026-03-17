@@ -68,14 +68,27 @@ The `Download` client was upgraded to track the download speed (bytes/ms) of eac
    - `download <filename>`: Example: `download large_file.dat`
    - `exit`: To stop the node.
 
-### 3.3 Scenario B: Running on Multiple Machines (LAN/Internet)
-This system requires Java RMI and TCP Sockets. When running on separate machines, you must explicitly set the `java.rmi.server.hostname` property.
+### 3.3 Scenario B: Running on Multiple Machines (LAN or Different Wi-Fi)
+If testing across different Wi-Fi networks, we recommend using **Tailscale** to bridge the computers into a private virtual network.
 
-1. **Identify IP Addresses:**
-   - Use `ipconfig` (Windows) or `ip a` (Linux/Mac) to find the IPv4 address of each machine.
-   - *Example: Server IP = `192.168.1.5`, Daemon A IP = `192.168.1.10`.*
+1.  **Preparation (on all machines):**
+    - Install **Tailscale** and log in with the *same* account on all machines.
+    - Identify each machine's Tailscale IP (starts with `100.x.x.x`).
+    - *Example:*
+        - **Machine 1 (Host Server):** `100.64.0.1`
+        - **Machine 2 (Client Node):** `100.64.0.2`
 
-3. **On Machine 2 (Integrated P2P Node):**
-   ```bash
-   java -Djava.rmi.server.hostname=192.168.1.10 -cp bin client.ClientNode 192.168.1.5 ./shared_folder
-   ```
+2.  **On Machine 1 (Running the Directory Server):**
+    ```bash
+    # Use double quotes for the -D flag in PowerShell
+    java "-Djava.rmi.server.hostname=100.64.0.1" -cp bin server.DirectoryServer
+    ```
+
+3.  **On Machine 2 (Integrated P2P Node):**
+    ```bash
+    # Set hostname to Machine 2's IP and point to Machine 1's IP for Registry
+    java "-Djava.rmi.server.hostname=100.64.0.2" -cp bin client.ClientNode 100.64.0.1 ./shared_data/client2
+    ```
+
+4.  **Communication:**
+    Once started, use the `download <filename>` command in Machine 2's terminal to pull files from Machine 1 or any other machine registered with the Directory.
