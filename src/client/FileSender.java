@@ -2,6 +2,7 @@ package client;
 
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
+import java.io.EOFException;
 import java.io.File;
 import java.io.RandomAccessFile;
 import java.net.Socket;
@@ -26,39 +27,48 @@ public class FileSender extends Thread {
             DataInputStream dis = new DataInputStream(socket.getInputStream());
             DataOutputStream dos = new DataOutputStream(socket.getOutputStream());
 
-            // Read the request details from the downloader
-            String filename = dis.readUTF();
-            long offset = dis.readLong();
-            int lengthToRead = dis.readInt();
+            byte[] buffer = new byte[65536]; // 64KB buffer
 
-            System.out.println("[FileSender] Requested " + filename + " | Offset: " + offset + " | Length: " + lengthToRead);
+            while (true) {
+                // Read the request details from the downloader
+                String filename;
+                try {
+                    filename = dis.readUTF();
+                } catch (EOFException e) {
+                    break; // Client finished and closed connection
+                }
 
-            File targetFile = new File(sharedFolderPath, filename);
-            if (!targetFile.exists()) {
-                System.err.println("[FileSender] File not found: " + filename);
-                dos.writeInt(-1); // Send error code
-            } else {
-                dos.writeInt(1); // Send success code
+                long offset = dis.readLong();
+                int lengthToRead = dis.readInt();
 
-                // Open the file for reading at the specific offset using RandomAccessFile
-                try (RandomAccessFile raf = new RandomAccessFile(targetFile, "r")) {
-                    raf.seek(offset);
+                System.out.println("[FileSender] Requested " + filename + " | Offset: " + offset + " | Length: " + lengthToRead);
 
-                    byte[] buffer = new byte[8192];
-                    int totalRead = 0;
-                    while (totalRead < lengthToRead) {
-                        int remaining = lengthToRead - totalRead;
-                        int readSize = Math.min(buffer.length, remaining);
-                        int bytesRead = raf.read(buffer, 0, readSize);
-                        
-                        // EOF reached earlier than expected
-                        if (bytesRead == -1) break;
-
-                        dos.write(buffer, 0, bytesRead);
-                        totalRead += bytesRead;
-                    }
+                File targetFile = new File(sharedFolderPath, filename);
+                if (!targetFile.exists()) {
+                    System.err.println("[FileSender] File not found: " + filename);
+                    dos.writeInt(-1); // Send error code
                     dos.flush();
-                    System.out.println("[FileSender] Finished sending " + totalRead + " bytes for " + filename);
+                } else {
+                    dos.writeInt(1); // Send success code
+
+                    // Open the file for reading at the specific offset using RandomAccessFile
+                    try (RandomAccessFile raf = new RandomAccessFile(targetFile, "r")) {
+                        raf.seek(offset);
+
+                        int totalRead = 0;
+                        while (totalRead < lengthToRead) {
+                            int remaining = lengthToRead - totalRead;
+                            int readSize = Math.min(buffer.length, remaining);
+                            int bytesRead = raf.read(buffer, 0, readSize);
+                            
+                            // EOF reached earlier than expected
+                            if (bytesRead == -1) break;
+
+                            dos.write(buffer, 0, bytesRead);
+                            totalRead += bytesRead;
+                        }
+                        dos.flush();
+                    }
                 }
             }
         } catch (java.net.SocketException se) {

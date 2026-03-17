@@ -9,7 +9,8 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * A worker thread that connects to a specific Daemon and processes chunks from a shared queue.
+ * Optimized worker thread that maintains a persistent TCP connection to a Daemon.
+ * It reuses the same socket for all chunks requested from that source.
  */
 public class FragmentDownloader extends Thread {
 
@@ -25,7 +26,6 @@ public class FragmentDownloader extends Thread {
     private AtomicLong globalDownloadedCounter;
     
     private boolean running = true;
-    private int chunksCompleted = 0;
     private long bytesDownloadedInSession = 0;
 
     public FragmentDownloader(String targetIp, int targetPort, String filename, FileChannel fileChannel, 
@@ -42,57 +42,60 @@ public class FragmentDownloader extends Thread {
         this.globalDownloadedCounter = globalDownloadedCounter;
     }
 
-    public int getSourceIndex() { return sourceIndex; }
-    public boolean isSuccess() { return !running; } // If it finished its loop naturally
-    public long getBytesDownloaded() { return bytesDownloadedInSession; }
-    public int getChunksCompleted() { return chunksCompleted; }
-
     @Override
     public void run() {
-        try {
-            while (true) {
-                Integer chunkIdx = chunkQueue.poll();
-                if (chunkIdx == null) break; // No more work
+        Integer currentChunk = null;
+        try (Socket socket = new Socket(targetIp, targetPort)) {
+            socket.setSoTimeout(10000); // 10s timeout
+            DataOutputStream dos = new DataOutputStream(socket.getOutputStream());
+            DataInputStream dis = new DataInputStream(socket.getInputStream());
 
-                if (!downloadChunk(chunkIdx)) {
-                    // Put back for retry by another thread if this source failed
-                    chunkQueue.add(chunkIdx);
-                    throw new Exception("Source failed during chunk " + chunkIdx);
+            byte[] buffer = new byte[65536]; // 64KB buffer for high-speed transfer
+
+            while (true) {
+                currentChunk = chunkQueue.poll();
+                if (currentChunk == null) break; // Finished all work
+
+                if (!downloadChunk(dis, dos, currentChunk, buffer)) {
+                    // Put back if it's a transient failure, then exit this worker
+                    chunkQueue.add(currentChunk);
+                    currentChunk = null; // Prevent re-addition in finally
+                    break;
                 }
-                chunksCompleted++;
             }
         } catch (Exception e) {
-            System.err.println("[Worker " + sourceIndex + "] Stopped: " + e.getMessage());
+            System.err.println("[Worker " + sourceIndex + "] Source " + targetIp + " failed: " + e.getMessage());
+            // If we crash before finishing a chunk, return it to the queue
+            if (currentChunk != null) {
+                chunkQueue.add(currentChunk);
+            }
         } finally {
             running = false;
         }
     }
 
-    private boolean downloadChunk(int chunkIdx) {
+    private boolean downloadChunk(DataInputStream dis, DataOutputStream dos, int chunkIdx, byte[] buffer) {
         long offset = (long) chunkIdx * chunkSize;
         int length = (int) Math.min(chunkSize, fileSize - offset);
 
-        try (Socket socket = new Socket(targetIp, targetPort)) {
-            socket.setSoTimeout(5000); // 5s read timeout
-            DataOutputStream dos = new DataOutputStream(socket.getOutputStream());
-            DataInputStream dis = new DataInputStream(socket.getInputStream());
-
-            // 1. Request
+        try {
+            // 1. Send Request
             dos.writeUTF(filename);
             dos.writeLong(offset);
             dos.writeInt(length);
             dos.flush();
 
-            // 2. Status
-            if (dis.readInt() == -1) return false;
+            // 2. Read Server Status (1 = OK)
+            if (dis.readInt() != 1) return false;
 
-            // 3. Data Transfer
-            byte[] buffer = new byte[8192];
+            // 3. Receive Data loop
             int totalRead = 0;
             while (totalRead < length) {
-                int bytesRead = dis.read(buffer, 0, Math.min(buffer.length, length - totalRead));
-                if (bytesRead == -1) return false;
+                int toRead = Math.min(buffer.length, length - totalRead);
+                int bytesRead = dis.read(buffer, 0, toRead);
+                if (bytesRead == -1) return false; // Stream closed unexpectedly
 
+                // Positional thread-safe write to file
                 ByteBuffer byteBuffer = ByteBuffer.wrap(buffer, 0, bytesRead);
                 while (byteBuffer.hasRemaining()) {
                     fileChannel.write(byteBuffer, offset + totalRead);
@@ -108,7 +111,6 @@ public class FragmentDownloader extends Thread {
         }
     }
 
-    // Compatibility methods for Download.java during transition
-    public long getTotalBytesCompleted() { return bytesDownloadedInSession; } // This now represents session progress
-    public void markSuccess() { running = false; }
+    public long getTotalBytesCompleted() { return bytesDownloadedInSession; }
+    public boolean isRunning() { return running; }
 }

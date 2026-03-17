@@ -13,7 +13,7 @@ import java.net.Socket;
 import java.net.InetSocketAddress;
 
 /**
- * The Download client using Dynamic Chunk-Based Load Balancing.
+ * The Download client using Dynamic Chunk-Based Load Balancing and Persistent Connections.
  */
 public class Download {
 
@@ -67,9 +67,8 @@ public class Download {
 
             // 2. Prepare files
             File downloadDir = new File(downloadFolderPath);
-            if (!downloadDir.exists())
-                downloadDir.mkdirs();
-
+            if (!downloadDir.exists()) downloadDir.mkdirs();
+            
             File finalFile = new File(downloadDir, filename);
             File partFile = new File(downloadDir, filename + ".part");
 
@@ -87,14 +86,14 @@ public class Download {
             long startTime = System.currentTimeMillis();
 
             try (RandomAccessFile partRaf = new RandomAccessFile(partFile, "rw")) {
-                partRaf.setLength(fileSize);
+                partRaf.setLength(fileSize); // Truncate and allocate space
                 FileChannel sharedChannel = partRaf.getChannel();
 
                 FragmentDownloader[] workers = new FragmentDownloader[numWorkers];
                 for (int i = 0; i < numWorkers; i++) {
                     ClientInfo s = vettedSources.get(i);
-                    workers[i] = new FragmentDownloader(s.getIp(), s.getPort(), filename, sharedChannel, i,
-                            chunkQueue, CHUNK_SIZE, fileSize, globalDownloaded);
+                    workers[i] = new FragmentDownloader(s.getIp(), s.getPort(), filename, sharedChannel, i, 
+                                                       chunkQueue, CHUNK_SIZE, fileSize, globalDownloaded);
                     workers[i].start();
                 }
 
@@ -102,23 +101,21 @@ public class Download {
                 while (true) {
                     boolean anyAlive = false;
                     for (FragmentDownloader w : workers) {
-                        if (w.isAlive())
-                            anyAlive = true;
+                        if (w.isAlive()) anyAlive = true;
                     }
 
                     printProgressBar(globalDownloaded.get(), fileSize, startTime);
-
-                    if (!anyAlive && chunkQueue.isEmpty())
-                        break;
+                    
+                    if (!anyAlive && chunkQueue.isEmpty()) break;
                     if (!anyAlive && !chunkQueue.isEmpty()) {
-                        System.err.println("\n[Error] All workers died but work remains.");
-                        break;
+                        System.err.println("\n[Error] All workers died but " + chunkQueue.size() + " chunks remain.");
+                        break; 
                     }
                     Thread.sleep(200);
                 }
-
+                
                 System.out.println();
-                sharedChannel.force(true);
+                sharedChannel.force(true); 
             }
 
             // 4. Cleanup and Finish
@@ -132,10 +129,15 @@ public class Download {
 
     private static void finalizeFile(File part, File finalF, long totalTimeMs, long totalSizeBytes) throws Exception {
         if (part.renameTo(finalF)) {
+            double timeSeconds = totalTimeMs / 1000.0;
+            double sizeMB = totalSizeBytes / 1024.0 / 1024.0;
+            double avgSpeed = (timeSeconds > 0) ? sizeMB / timeSeconds : sizeMB;
+
             System.out.println("\n------------------------------------------------");
             System.out.println("DOWNLOAD SUCCESSFUL!");
-            System.out.println(String.format("Total Time: %.2f seconds", totalTimeMs / 1000.0));
-            System.out.println(String.format("Total Size: %.2f MB", totalSizeBytes / 1024.0 / 1024.0));
+            System.out.println(String.format("Total Time: %.2f seconds", timeSeconds));
+            System.out.println(String.format("Total Size: %.2f MB", sizeMB));
+            System.out.println(String.format("Average Speed: %.2f MB/s", avgSpeed));
             System.out.println("Saved to: " + finalF.getAbsolutePath());
             System.out.println("------------------------------------------------");
         } else {
@@ -146,8 +148,7 @@ public class Download {
     private static List<ClientInfo> getVettedSources(List<ClientInfo> rawSources, String localIp) {
         List<ClientInfo> vetted = new ArrayList<>();
         for (ClientInfo s : rawSources) {
-            if (localIp != null && s.getIp().equals(localIp))
-                continue;
+            if (localIp != null && s.getIp().equals(localIp)) continue;
             try (Socket testSocket = new Socket()) {
                 testSocket.connect(new InetSocketAddress(s.getIp(), s.getPort()), 1000); // 1s timeout
                 vetted.add(s);
@@ -160,17 +161,14 @@ public class Download {
 
     private static void printProgressBar(long current, long total, long startTime) {
         int width = 40;
-        double progress = (double) current / total;
+        double progress = (float) current / total;
         int completedWidth = (int) (progress * width);
 
         StringBuilder sb = new StringBuilder("\rProgress: [");
         for (int i = 0; i < width; i++) {
-            if (i < completedWidth)
-                sb.append("=");
-            else if (i == completedWidth)
-                sb.append(">");
-            else
-                sb.append(" ");
+            if (i < completedWidth) sb.append("=");
+            else if (i == completedWidth) sb.append(">");
+            else sb.append(" ");
         }
 
         long elapsed = System.currentTimeMillis() - startTime;

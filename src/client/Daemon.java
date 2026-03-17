@@ -108,10 +108,11 @@ public class Daemon {
             // 3.7. Shutdown Hook for graceful unregistration
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {
                 try {
-                    System.out.println("\nDaemon service shutting down... Unregistering from Directory.");
+                    System.out.println("\n[System] Daemon shutting down... Notifying Server.");
                     directory.unregisterClient(myInfo);
+                    System.out.println("[System] Unregistered successfully.");
                 } catch (Exception e) {
-                    // Silently fail as the server might be unreachable
+                    System.err.println("[System] Could not notify server: " + e.getMessage());
                 }
             }));
 

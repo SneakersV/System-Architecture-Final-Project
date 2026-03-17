@@ -73,6 +73,7 @@ public class DirectoryImpl extends UnicastRemoteObject implements Directory {
 
     @Override
     public synchronized void unregisterClient(ClientInfo client) throws RemoteException {
+        System.out.println("Client explicitly unregistering: " + client);
         removeClientEverywhere(client);
     }
 
