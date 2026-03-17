@@ -61,8 +61,11 @@ public class FileSender extends Thread {
                     System.out.println("[FileSender] Finished sending " + totalRead + " bytes for " + filename);
                 }
             }
+        } catch (java.net.SocketException se) {
+            // Handle client disconnection or "Connection reset" gracefully
+            System.out.println("[FileSender] Client disconnected or canceled the download (" + se.getMessage() + ").");
         } catch (Exception e) {
-            System.err.println("[FileSender] Exception: " + e.getMessage());
+            System.err.println("[FileSender] Unexpected Exception: " + e.getMessage());
             e.printStackTrace();
         } finally {
             try {

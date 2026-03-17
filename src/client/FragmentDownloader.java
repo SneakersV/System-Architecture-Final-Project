@@ -22,7 +22,13 @@ public class FragmentDownloader extends Thread {
     private boolean success = false;
     private int bytesDownloaded = 0;
 
-    public FragmentDownloader(String targetIp, int targetPort, String filename, long offset, int length, FileChannel fileChannel, int sourceIndex) {
+    // Support for persistent resume tracking
+    private long baseOffset;
+    private int baseLength;
+    private int previouslyDownloaded;
+
+    public FragmentDownloader(String targetIp, int targetPort, String filename, long offset, int length,
+            FileChannel fileChannel, int sourceIndex) {
         this.targetIp = targetIp;
         this.targetPort = targetPort;
         this.filename = filename;
@@ -30,6 +36,24 @@ public class FragmentDownloader extends Thread {
         this.length = length;
         this.fileChannel = fileChannel;
         this.sourceIndex = sourceIndex;
+    }
+
+    public void setBaseInfo(long baseOffset, int baseLength, int previouslyDownloaded) {
+        this.baseOffset = baseOffset;
+        this.baseLength = baseLength;
+        this.previouslyDownloaded = previouslyDownloaded;
+    }
+
+    public long getBaseOffset() { return baseOffset; }
+    public int getBaseLength() { return baseLength; }
+    public int getPreviouslyDownloaded() { return previouslyDownloaded; }
+
+    public long getTotalBytesCompleted() {
+        return previouslyDownloaded + bytesDownloaded;
+    }
+
+    public void markSuccess() {
+        this.success = true;
     }
 
     public boolean success() { return success; } // Renamed for clarity if needed, keeping isSuccess for compatibility

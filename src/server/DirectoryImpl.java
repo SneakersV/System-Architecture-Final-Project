@@ -23,7 +23,7 @@ public class DirectoryImpl extends UnicastRemoteObject implements Directory {
     // Map to track the last heartbeat from each client
     private ConcurrentHashMap<ClientInfo, Long> clientHeartbeats;
     
-    private static final long HEARTBEAT_TIMEOUT = 15000; // 15 seconds
+    private static final long HEARTBEAT_TIMEOUT = 8000; // 8 seconds
 
     public DirectoryImpl() throws RemoteException {
         super();
