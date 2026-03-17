@@ -106,8 +106,11 @@ public class Download {
 
                 while (!allDone) {
                     allDone = true;
+                    long totalDownloaded = 0;
+                    
                     for (int i = 0; i < numSources; i++) {
                         FragmentDownloader fd = downloaders[i];
+                        totalDownloaded += fd.getBytesDownloaded();
                         
                         if (fd.isAlive()) {
                             allDone = false;
@@ -139,7 +142,7 @@ public class Download {
                             
                             ClientInfo newSource = sources.get(bestSourceIndex);
 
-                            System.err.println("[Recovery] Thread " + i + " failed after " + downloaded + " bytes. Retrying remaining " + newLength + " bytes from " + newSource.getIp());
+                            System.err.println("\n[Recovery] Thread " + i + " failed after " + downloaded + " bytes. Retrying remaining " + newLength + " bytes from " + newSource.getIp());
                             
                             fragmentStartTimes[i] = System.currentTimeMillis();
                             downloaders[i] = new FragmentDownloader(newSource.getIp(), newSource.getPort(), filename, newOffset, newLength, sharedChannel, bestSourceIndex);
@@ -152,10 +155,14 @@ public class Download {
                         }
                     }
 
+                    // Print progress bar
+                    printProgressBar(totalDownloaded, fileSize, startTime);
+
                     if (!allDone) {
-                        Thread.sleep(500); 
+                        Thread.sleep(200); // Faster update for smooth UI
                     }
                 }
+                System.out.println(); // Move to next line after progress bar finishes
 
                 totalTime = System.currentTimeMillis() - startTime;
                 
@@ -181,5 +188,24 @@ public class Download {
             System.err.println("Download error: " + e.getMessage());
             e.printStackTrace();
         }
+    }
+
+    private static void printProgressBar(long current, long total, long startTime) {
+        int width = 40;
+        double progress = (double) current / total;
+        int completedWidth = (int) (progress * width);
+        
+        StringBuilder sb = new StringBuilder("\rProgress: [");
+        for (int i = 0; i < width; i++) {
+            if (i < completedWidth) sb.append("=");
+            else if (i == completedWidth) sb.append(">");
+            else sb.append(" ");
+        }
+        
+        long elapsed = System.currentTimeMillis() - startTime;
+        double speed = (elapsed > 0) ? (current / 1024.0 / 1024.0) / (elapsed / 1000.0) : 0;
+        
+        sb.append(String.format("] %d%% (%.2f MB/s)", (int) (progress * 100), speed));
+        System.out.print(sb.toString());
     }
 }
