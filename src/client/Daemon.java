@@ -37,7 +37,14 @@ public class Daemon {
             // 2. Open a random free port for the TCP Socket server
             ServerSocket serverSocket = new ServerSocket(0);
             int localPort = serverSocket.getLocalPort();
-            String localIp = InetAddress.getLocalHost().getHostAddress();
+            
+            // Priority 1: System Property (Tailscale/VPN)
+            // Priority 2: Localhost address
+            String localIp = System.getProperty("java.rmi.server.hostname");
+            if (localIp == null || localIp.isEmpty()) {
+                localIp = InetAddress.getLocalHost().getHostAddress();
+            }
+            
             ClientInfo myInfo = new ClientInfo(localIp, localPort);
             System.out.println("Daemon service started at " + localIp + ":" + localPort);
 
@@ -52,7 +59,7 @@ public class Daemon {
             File[] listOfFiles = folder.listFiles();
             if (listOfFiles != null) {
                 for (File file : listOfFiles) {
-                    if (file.isFile()) {
+                    if (file.isFile() && !file.getName().endsWith(".part")) {
                         System.out.println("Registering file: " + file.getName() + " (" + file.length() + " bytes)");
                         directory.registerFile(file.getName(), file.length(), myInfo);
                     }
@@ -67,7 +74,7 @@ public class Daemon {
                         File[] currentFiles = folder.listFiles();
                         if (currentFiles != null) {
                             for (File file : currentFiles) {
-                                if (file.isFile()) {
+                                if (file.isFile() && !file.getName().endsWith(".part")) {
                                     directory.registerFile(file.getName(), file.length(), myInfo);
                                 }
                             }

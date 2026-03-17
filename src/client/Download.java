@@ -51,15 +51,22 @@ public class Download {
             int numSources = sources.size();
             System.out.println("File size: " + fileSize + " bytes. Available sources: " + numSources);
 
-            // 2. Prepare the local dummy file
+            // 2. Prepare the local file using a temporary extension
             File downloadDir = new File(downloadFolderPath);
             if (!downloadDir.exists()) {
                 downloadDir.mkdirs();
             }
-            File outputFile = new File(downloadDir, filename);
+            File finalFile = new File(downloadDir, filename);
+            File partFile = new File(downloadDir, filename + ".part");
             
-            // Create a file of the exact size we need
-            try (RandomAccessFile raf = new RandomAccessFile(outputFile, "rw")) {
+            // If the final file exists, we might want to skip or overwrite. 
+            // For now, let's allow overwrite but avoid dirty partials.
+            if (finalFile.exists()) {
+                System.out.println("Warning: " + filename + " already exists. Overwriting...");
+            }
+
+            // Create/truncate the part file to the exact size
+            try (RandomAccessFile raf = new RandomAccessFile(partFile, "rw")) {
                 raf.setLength(fileSize);
             }
 
@@ -78,7 +85,7 @@ public class Download {
                 System.out.println("Starting thread " + i + " -> Sub-Task [offset=" + offset + ", length=" + lengthToRead + "] from " + source);
                 
                 fragmentStartTimes[i] = System.currentTimeMillis();
-                downloaders[i] = new FragmentDownloader(source.getIp(), source.getPort(), filename, offset, lengthToRead, outputFile.getAbsolutePath(), i);
+                downloaders[i] = new FragmentDownloader(source.getIp(), source.getPort(), filename, offset, lengthToRead, partFile.getAbsolutePath(), i);
                 downloaders[i].start();
             }
 
@@ -126,15 +133,12 @@ public class Download {
                         System.out.println("[Recovery] Resuming " + newLength + " remaining bytes from best source " + newSource + " (Rate: " + bestRate + " bytes/ms)");
                         
                         fragmentStartTimes[i] = System.currentTimeMillis();
-                        downloaders[i] = new FragmentDownloader(newSource.getIp(), newSource.getPort(), filename, newOffset, newLength, outputFile.getAbsolutePath(), bestSourceIndex);
+                        downloaders[i] = new FragmentDownloader(newSource.getIp(), newSource.getPort(), filename, newOffset, newLength, partFile.getAbsolutePath(), bestSourceIndex);
                         downloaders[i].start();
                     } else {
-                        // Success - calculate performance for this source
-                        long endTime = System.currentTimeMillis();
-                        long duration = endTime - fragmentStartTimes[i];
+                        long duration = System.currentTimeMillis() - fragmentStartTimes[i];
                         if (duration > 0) {
-                            int sourceIdx = fd.getSourceIndex();
-                            performanceMetrics[sourceIdx] = fd.getLength() / duration;
+                            performanceMetrics[fd.getSourceIndex()] = fd.getLength() / duration;
                         }
                     }
                 }
@@ -145,12 +149,14 @@ public class Download {
             }
 
             long endTime = System.currentTimeMillis();
-            System.out.println("Download complete! Time taken: " + (endTime - startTime) + " ms.");
-            System.out.println("File saved to: " + outputFile.getAbsolutePath());
-
-            // 5. Explicitly notify the system that a new file is available (Auto-seeding)
-            // We can resolve our local ClientInfo to register this file.
-            // This logic will be triggered if ClientNode is running.
+            
+            // 5. Finalizing: Rename .part to actual filename
+            if (partFile.renameTo(finalFile)) {
+                System.out.println("Download complete! Time taken: " + (endTime - startTime) + " ms.");
+                System.out.println("File saved and verified: " + finalFile.getAbsolutePath());
+            } else {
+                throw new Exception("Failed to finalize file (rename error). Ensure no other process is holding the file.");
+            }
 
         } catch (Exception e) {
             System.err.println("Download error: " + e.getMessage());
