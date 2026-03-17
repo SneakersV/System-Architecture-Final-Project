@@ -37,14 +37,14 @@ public class Daemon {
             // 2. Open a random free port for the TCP Socket server
             ServerSocket serverSocket = new ServerSocket(0);
             int localPort = serverSocket.getLocalPort();
-            
+
             // Priority 1: System Property (Tailscale/VPN)
             // Priority 2: Localhost address
             String localIp = System.getProperty("java.rmi.server.hostname");
             if (localIp == null || localIp.isEmpty()) {
                 localIp = InetAddress.getLocalHost().getHostAddress();
             }
-            
+
             ClientInfo myInfo = new ClientInfo(localIp, localPort);
             System.out.println("Daemon service started at " + localIp + ":" + localPort);
 
