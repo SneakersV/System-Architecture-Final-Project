@@ -69,27 +69,25 @@ The `Download` client was upgraded to track the download speed (bytes/ms) of eac
    - `exit`: To stop the node.
 
 ### 3.3 Scenario B: Running on Multiple Machines (LAN or Different Wi-Fi)
-If testing across different Wi-Fi networks, we recommend using **Tailscale** to bridge the computers into a private virtual network.
+If testing across different Wi-Fi networks, use **Tailscale** to bridge the computers.
 
 1.  **Preparation (on all machines):**
-    - Install **Tailscale** and log in with the *same* account on all machines.
+    - Install **Tailscale** and log in with the *same* account.
     - Identify each machine's Tailscale IP (starts with `100.x.x.x`).
-    - *Example:*
-        - **Machine 1 (Host Server):** `100.64.0.1`
-        - **Machine 2 (Client Node):** `100.64.0.2`
+    - *Example:* **Machine 1** (Server Host) = `100.64.0.1`, **Machine 2** (Client Node) = `100.64.0.2`.
 
 2.  **On Machine 1 (Running the Directory Server):**
     ```powershell
-    # -Djava.rmi.server.hostname = IP of THIS machine (Machine 1)
+    # -D flag MUST be in quotes for PowerShell. Set it to THIS machine's IP.
     java "-Djava.rmi.server.hostname=100.64.0.1" -cp bin server.DirectoryServer
     ```
 
 3.  **On Machine 2 (Integrated P2P Node):**
     ```powershell
-    # -Djava.rmi.server.hostname = IP of THIS machine (Machine 2)
-    # The last argument (100.64.0.1) = IP of the Directory Server (Machine 1)
+    # 1. Set hostname to THIS machine's IP (Machine 2)
+    # 2. Last argument is the IP of the Directory Server (Machine 1)
     java "-Djava.rmi.server.hostname=100.64.0.2" -cp bin client.ClientNode 100.64.0.1 <folder_path>
     ```
 
 4.  **Communication:**
-    Once started, use the `download <filename>` command in Machine 2's terminal to pull files from Machine 1 or any other machine registered with the Directory.
+    In Machine 2's terminal, type `download <filename>` to fetch files from Machine 1.
