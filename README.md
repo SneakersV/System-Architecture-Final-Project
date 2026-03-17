@@ -1,93 +1,85 @@
 # Parallel Download Infrastructure - Project Report
-**Authors:** [Your Name / Team Name]
+**Authors:** [Chu Hoang Viet / Bui Dang Quang]
 
-## 1. Project Overview & Architecture
-This project implements a distributed system for parallel file downloading to improve overall speed by fetching fragments from multiple sources simultaneously. The architecture comprises three main components:
-- **Directory Server (RMI):** Acts as a centralized registry. It tracks which files are available and which `Daemon` nodes are currently hosting them.
-- **Daemon (TCP Server & RMI Client):** Runs on host machines. Upon startup, it registers its shared local files with the Directory Server. It then listens for incoming TCP connections to serve specific file fragments to `Download` clients.
-- **Download (TCP Client & RMI Client):** The user-facing client. It queries the Directory Server for file locations, divides the file into chunks, and spawns multiple parallel threads to fetch fragments from different `Daemons` simultaneously.
+## 1. System Prototype & Architecture
+This project implements a distributed system for parallel file downloading to improve overall speed by fetching fragments from multiple sources simultaneously. 
 
-## 2. Implemented Features & Enhancements
+### 1.1 Core Components
+- **Directory Server (RMI):** Acts as a centralized registry. It tracks which files are available and which node addresses are currently hosting them.
+- **Daemon (TCP Server & RMI Client):** A background service running on each node. Upon startup, it informs (1) the Directory about the available files in a specific folder. It then listens for incoming TCP requests to serve file fragments.
+- **Download (TCP Client & RMI Client):** When a download starts, this component requests (2) the Directory to get the list of clients where the file is available, and then downloads (3) different fragments of the file in parallel from different clients.
 
-### 2.1 Basic Prototype Capabilities (Mandatory)
-- **Parallel File Downloading:** The requested file is split into independent sub-tasks based on the number of available sources.
-- **Concurrent TCP Connections:** The client opens parallel threads to fetch chunks directly from the corresponding Daemons.
-- **Automatic File Registration:** Daemons automatically scan a target directory and report their files to the Server.
-- **Dynamic File Discovery:** A background scanner in the Daemon picks up newly added files every 5 seconds without needing a restart.
-- **Failure Recovery:** If a `Daemon` disconnects midway, the `Download` client can catch the exception and redirect the missing fragment request to the surviving Daemons, without dropping the entire download.
+### 1.2 Parallelism Logic
+The system optimizes file transfers by dividing a single file into $N$ equal fragments (where $N$ is the number of available sources). Each fragment is assigned to a dedicated `FragmentDownloader` thread, which establishes a direct TCP socket connection to a remote Daemon. This allows for high-throughput data transfer by utilizing the concurrent upload bandwidth of multiple nodes.
 
-### 2.2 Enhancements (Extra Features)
-**1. Dynamic Adaptation (Client Disconnection & Heartbeat)**
-To ensure the Directory remains accurate when nodes fail or leave ungracefully, we implemented a periodic Heartbeat mechanism in the `Daemon`. 
-- The `Daemon` sends a heartbeat to the Directory every 5 seconds.
-- A background `Timer` thread in the Directory checks for stale clients (no heartbeat for 15s) and automatically removes them from the file registry, ensuring new downloads don't connect to dead nodes.
-- A JVM Shutdown Hook was also added to the `Daemon` to proactively send an `unregister` signal upon normal exit (Ctrl+C).
+## 2. Enhancements & Technical Robustness
+Beyond the basic prototype, the following technical optimizations were implemented:
 
-**2. Source Selection Optimization (Performance Tracking)**
-The `Download` client was upgraded to track the download speed (bytes/ms) of each source dynamically based on past fragments completed.
-- When an active fragment download fails due to a network error, the client must resume the fragment from another source.
-- Instead of blindly picking the next source in a basic round-robin fashion, the client now selects the alternative source that has demonstrated the highest transfer rate so far during the session.
+### 2.1 Failure and Disconnection Handling
+The system demonstrates high resilience during active transfers. If a client serving a fragment fails or disconnects midway, the `Download` component automatically catches the socket exception. It then identifies the remaining bytes and seamlessly migrates the request to another available healthy source to resume the download without user intervention.
+
+### 2.2 Dynamic Adaptation
+The Directory Server maintains a real-time view of the network:
+- **Client Integration**: New clients are integrated automatically as their Daemon services register files.
+- **Auto-Cleanup**: A heartbeat mechanism detects disconnected clients. If a node fails to send a heartbeat within 8 seconds, the Directory purges its entries to ensure future downloads are only directed to live sources.
+- **Source Vetting**: Before initiating a parallel download, the client performs an active TCP "liveness" probe on all reported sources to ensure they are reachable.
+
+### 2.3 Optimization & Cross-Platform Stability
+- **Source Selection (Load Monitoring)**: The system tracks the transmission rates of each client. If a failure occurs, it prioritizes the machine with the highest historical throughput for the recovery process.
+- **Windows Parallel I/O**: We utilized `java.nio.channels.FileChannel` to solve disk-locking bottlenecks common on Windows. This enables true positional parallel writes, allowing multiple threads to write to the same file at different offsets without interference.
+- **Self-Source Filtering**: To prevent redundant network loops and potential metadata conflicts, the node automatically filters out its own IP from the list of available sources during a download.
 
 ## 3. How to Run the System
 
-### 3.1 Initial Setup
-1. **Directory Structure:** Ensure your project folder matches the following structure (create missing directories as needed):
-   - `src/`: Contains the Java source code (`client/`, `server/`, `shared/`).
-   - `shared_data/`: Root folder for files you want to share.
-     - `shared_data/client1/`: Folder for the first source. Place a test file (e.g., `large_file.dat`) here.
-     - `shared_data/client2/`: Folder for the second source. Place the *same* test file here.
-   - `downloads/`: An empty folder where the downloaded file will be saved.
-
-2. **Clean up and Compile:**
-   ```bash
-   # Windows
+### 3.1 Setup
+1. **Directory Structure:**
+   - `src/`: Java source code.
+   - `shared_file/`: Folder for shared files (place test files here).
+2. **Compile:**
+   ```powershell
+   # Clean bin folder
    rm -r -fo bin ; mkdir bin
-   javac -d bin src/shared/*.java src/server/*.java src/client/*.java
-
-   # Linux/Mac
-   rm -rf bin && mkdir bin
+   # Compile all modules
    javac -d bin src/shared/*.java src/server/*.java src/client/*.java
    ```
 
-### 3.2 Scenario A: Running on a single computer (Localhost - 127.0.0.1)
+### 3.2 Scenario A: Single Machine (Localhost - 127.0.0.1)
 1. **Start the Directory Server:**
-   ```bash
+   ```powershell
    java -cp bin server.DirectoryServer
    ```
 2. **Start Integrated P2P Client Nodes:**
    *(Open separate terminals for each node)*
-   ```bash
+   ```powershell
    # Terminal for Node 1
-   java -cp bin client.ClientNode 127.0.0.1 <folder_path>
-
+   java -cp bin client.ClientNode 127.0.0.1 shared_file
    # Terminal for Node 2
-   java -cp bin client.ClientNode 127.0.0.1 <folder_path>
+   java -cp bin client.ClientNode 127.0.0.1 shared_file
    ```
-3. **Usage inside ClientNode CLI:**
-   Once the node starts, you can type commands:
-   - `download <filename>`: Example: `download large_file.dat`
-   - `exit`: To stop the node.
 
-### 3.3 Scenario B: Running on Multiple Machines (LAN or Different Wi-Fi)
-If testing across different Wi-Fi networks, use **Tailscale** to bridge the computers.
+### 3.3 Scenario B: Multiple Machines (Tailscale / LAN)
+To ensure connectivity across different networks, use a VPN/Overlay like Tailscale and configure the RMI hostname.
 
-1.  **Preparation (on all machines):**
-    - Install **Tailscale** and log in with the *same* account.
-    - Identify each machine's Tailscale IP (starts with `100.x.x.x`).
-    - *Example:* **Machine 1** (Server Host) = `100.64.0.1`, **Machine 2** (Client Node) = `100.64.0.2`.
+**1. Start the Directory Server:**
+```powershell
+# Set hostname to THIS machine's Tailscale IP (starts with 100.x.x.x)
+java "-Djava.rmi.server.hostname=<SERVER_IP>" -cp bin server.DirectoryServer
+```
 
-2.  **On Machine 1 (Running the Directory Server):**
-    ```powershell
-    # -D flag MUST be in quotes for PowerShell. Set it to THIS machine's IP.
-    java "-Djava.rmi.server.hostname=100.64.0.1" -cp bin server.DirectoryServer
-    ```
+**2. Start P2P Client Nodes:**
+```powershell
+# Set hostname to THIS machine's IP, and point to the Directory Server IP
+java "-Djava.rmi.server.hostname=<CLIENT_IP>" -cp bin client.ClientNode <SERVER_IP> shared_file
+```
 
-3.  **On Machine 2 (Integrated P2P Node):**
-    ```powershell
-    # 1. Set hostname to THIS machine's IP (Machine 2)
-    # 2. Last argument is the IP of the Directory Server (Machine 1)
-    java "-Djava.rmi.server.hostname=100.64.0.2" -cp bin client.ClientNode 100.64.0.1 <folder_path>
-    ```
+### 3.4 Usage & Commands
+Once the node starts, the following commands are available:
+- `download <filename>`: Initiates the parallel fetching process.
+- `exit`: Safely unregisters and stops the node.
 
-4.  **Communication:**
-    In Machine 2's terminal, type `download <filename>` to fetch files from Machine 1.
+### 3.5 Troubleshooting
+- **ClassNotFoundException:** Ensure you are running commands from the root directory and the `bin` folder is correctly populated.
+- **Vetting Error:** If the system says "No valid remote sources available", confirm that other `ClientNode` instances are running and that their Daemons have successfully registered their files.
+
+---
+**Technical Note:** This system is optimized for high-concurrency P2P transfers using Java's NIO and RMI frameworks.
