@@ -9,8 +9,15 @@ This project implements a distributed system for parallel file downloading to im
 - **Daemon (TCP Server & RMI Client):** A background service running on each node. Upon startup, it informs (1) the Directory about the available files in a specific folder. It then listens for incoming TCP requests to serve file fragments.
 - **Download (TCP Client & RMI Client):** When a download starts, this component requests (2) the Directory to get the list of clients where the file is available, and then downloads (3) different fragments of the file in parallel from different clients.
 
-### 1.2 Parallelism Logic
-The system optimizes file transfers by dividing a single file into $N$ equal fragments (where $N$ is the number of available sources). Each fragment is assigned to a dedicated `FragmentDownloader` thread, which establishes a direct TCP socket connection to a remote Daemon. This allows for high-throughput data transfer by utilizing the concurrent upload bandwidth of multiple nodes.
+### 1.2 Parallelism Logic (Dynamic Load Balancing)
+The system employs a **dynamic chunk-based work queue** to maximize throughput:
+1.  **File Segmentation**: The requested file is logically divided into hundreds of small, equal-sized **Chunks** (e.g., 1MB each).
+2.  **Shared Work Queue**: These chunk indices are placed into a thread-safe `ConcurrentLinkedQueue`.
+3.  **Worker Pool**: A pool of `FragmentDownloader` threads is launched (one per healthy source). 
+4.  **Load Balancing**: Each worker thread continuously pulls a chunk index from the queue, downloads it from its assigned source, and repeats. 
+    - **Faster sources** will naturally process more chunks.
+    - **Slower sources** will not bottleneck the overall download.
+    - **Fault Tolerance**: If a source fails mid-chunk, that specific chunk is pushed back into the queue to be retried by another available worker.
 
 ## 2. Enhancements & Technical Robustness
 Beyond the basic prototype, the following technical optimizations were implemented:
