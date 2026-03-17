@@ -36,27 +36,35 @@ public class ClientNode {
         System.out.println("================================================");
 
         while (true) {
-            System.out.print("\nP2P> ");
-            String input = scanner.nextLine().trim();
+            try {
+                System.out.print("\nP2P> ");
+                if (!scanner.hasNextLine()) {
+                    break;
+                }
+                String input = scanner.nextLine().trim();
 
-            if (input.equalsIgnoreCase("exit")) {
-                System.out.println("Exiting... Background services will stop.");
-                System.exit(0);
-            }
-
-            if (input.startsWith("download ")) {
-                String filename = input.substring(9).trim();
-                if (filename.isEmpty()) {
-                    System.out.println("Please specify a filename.");
-                    continue;
+                if (input.equalsIgnoreCase("exit")) {
+                    System.out.println("Exiting... Background services will stop.");
+                    System.exit(0);
                 }
 
-                System.out.println("[System] Initiating download for: " + filename);
-                // We use our shared folder path as the download destination 
-                // so that the Daemon part can immediately seed it.
-                Download.executeDownload(filename, directoryIp, sharedFolderPath);
-            } else if (!input.isEmpty()) {
-                System.out.println("Unknown command. Use 'download <filename>' or 'exit'.");
+                if (input.startsWith("download ")) {
+                    String filename = input.substring(9).trim();
+                    if (filename.isEmpty()) {
+                        System.out.println("Please specify a filename.");
+                        continue;
+                    }
+
+                    System.out.println("[System] Initiating download for: " + filename);
+                    Download.executeDownload(filename, directoryIp, sharedFolderPath);
+                } else if (!input.isEmpty()) {
+                    System.out.println("Unknown command. Use 'download <filename>' or 'exit'.");
+                }
+            } catch (Exception e) {
+                if (!(e instanceof java.util.NoSuchElementException)) {
+                    System.err.println("Input error: " + e.getMessage());
+                }
+                break;
             }
         }
     }
