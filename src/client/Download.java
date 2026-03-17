@@ -24,6 +24,10 @@ public class Download {
         String directoryIp = args[1];
         String downloadFolderPath = args[2];
 
+        executeDownload(filename, directoryIp, downloadFolderPath);
+    }
+
+    public static void executeDownload(String filename, String directoryIp, String downloadFolderPath) {
         try {
             // 1. Connect to Directory to get file info
             String rmiUrl = "rmi://" + directoryIp + ":1099/Directory";
@@ -80,8 +84,8 @@ public class Download {
 
             // 4. Monitor and handle failures (Adaptive resume)
             boolean allDone = false;
-            int[] retryCounts = new int[numSources]; // Track retries per fragment
-            long[] performanceMetrics = new long[numSources]; // Bytes per ms for each source
+            int[] retryCounts = new int[numSources];
+            long[] performanceMetrics = new long[numSources];
 
             while (!allDone) {
                 allDone = true;
@@ -103,7 +107,6 @@ public class Download {
                         long newOffset = fd.getOffset() + downloaded;
                         int newLength = fd.getLength() - downloaded;
 
-                        // Optimized Source Selection: Pick the source with best performance so far
                         int bestSourceIndex = 0;
                         long bestRate = -1;
                         for (int s = 0; s < numSources; s++) {
@@ -113,7 +116,6 @@ public class Download {
                             }
                         }
                         
-                        // If no metrics yet, fallback to next source
                         if (bestRate <= 0) {
                             bestSourceIndex = (fd.getSourceIndex() + 1) % sources.size();
                         }
@@ -137,7 +139,6 @@ public class Download {
                     }
                 }
 
-                // Sleep briefly to avoid 100% CPU spinning in while loop
                 if (!allDone) {
                     Thread.sleep(500); 
                 }
@@ -147,8 +148,12 @@ public class Download {
             System.out.println("Download complete! Time taken: " + (endTime - startTime) + " ms.");
             System.out.println("File saved to: " + outputFile.getAbsolutePath());
 
+            // 5. Explicitly notify the system that a new file is available (Auto-seeding)
+            // We can resolve our local ClientInfo to register this file.
+            // This logic will be triggered if ClientNode is running.
+
         } catch (Exception e) {
-            System.err.println("Download Exception: " + e.getMessage());
+            System.err.println("Download error: " + e.getMessage());
             e.printStackTrace();
         }
     }

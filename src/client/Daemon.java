@@ -24,6 +24,10 @@ public class Daemon {
         String directoryIp = args[0];
         String sharedFolderPath = args[1];
 
+        runService(directoryIp, sharedFolderPath);
+    }
+
+    public static void runService(String directoryIp, String sharedFolderPath) {
         try {
             // 1. Locate the Directory Server via RMI
             String rmiUrl = "rmi://" + directoryIp + ":1099/Directory";
@@ -35,7 +39,7 @@ public class Daemon {
             int localPort = serverSocket.getLocalPort();
             String localIp = InetAddress.getLocalHost().getHostAddress();
             ClientInfo myInfo = new ClientInfo(localIp, localPort);
-            System.out.println("Daemon started at " + localIp + ":" + localPort);
+            System.out.println("Daemon service started at " + localIp + ":" + localPort);
 
             // 3. Scan the shared folder and register files
             File folder = new File(sharedFolderPath);
@@ -55,37 +59,39 @@ public class Daemon {
                 }
             }
 
-            // 3.5. Background Thread to detect new files dynamically (Every 10 seconds)
+            // 3.5. Background Thread to detect new files dynamically (Every 5 seconds)
             Thread folderScanner = new Thread(() -> {
-                while (true) {
+                while (!Thread.currentThread().isInterrupted()) {
                     try {
                         Thread.sleep(5000); // 5 seconds
                         File[] currentFiles = folder.listFiles();
                         if (currentFiles != null) {
                             for (File file : currentFiles) {
                                 if (file.isFile()) {
-                                    // Directory.registerFile is idempotent, it won't add duplicate clients
                                     directory.registerFile(file.getName(), file.length(), myInfo);
                                 }
                             }
                         }
+                    } catch (InterruptedException e) {
+                        break;
                     } catch (Exception e) {
                         System.err.println("Scanner exception: " + e.getMessage());
                     }
                 }
             });
-            folderScanner.setDaemon(true); // Don't prevent JVM shutdown
+            folderScanner.setDaemon(true);
             folderScanner.start();
 
             // 3.6. Background Heartbeat Thread (Every 5 seconds)
             Thread heartbeatThread = new Thread(() -> {
-                while (true) {
+                while (!Thread.currentThread().isInterrupted()) {
                     try {
                         directory.heartBeat(myInfo);
                         Thread.sleep(5000);
+                    } catch (InterruptedException e) {
+                        break;
                     } catch (Exception e) {
                         System.err.println("Heartbeat error: " + e.getMessage());
-                        // Try to reconnect if server was down?
                     }
                 }
             });
@@ -95,10 +101,10 @@ public class Daemon {
             // 3.7. Shutdown Hook for graceful unregistration
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {
                 try {
-                    System.out.println("\nDaemon shutting down... Unregistering from Directory.");
+                    System.out.println("\nDaemon service shutting down... Unregistering from Directory.");
                     directory.unregisterClient(myInfo);
                 } catch (Exception e) {
-                    System.err.println("Shutdown unregistration error: " + e.getMessage());
+                    // Silently fail as the server might be unreachable
                 }
             }));
 
@@ -106,7 +112,6 @@ public class Daemon {
             System.out.println("Daemon is waiting for download requests...");
             while (true) {
                 Socket clientSocket = serverSocket.accept();
-                // Create a new thread to handle the fragment sending
                 FileSender sender = new FileSender(clientSocket, sharedFolderPath);
                 sender.start();
             }
