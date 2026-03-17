@@ -58,10 +58,10 @@ The `Download` client was upgraded to track the download speed (bytes/ms) of eac
    *(Open separate terminals for each node)*
    ```bash
    # Terminal for Node 1
-   java -cp bin client.ClientNode 127.0.0.1 ./shared_data/client1
+   java -cp bin client.ClientNode 127.0.0.1 <folder_path>
 
    # Terminal for Node 2
-   java -cp bin client.ClientNode 127.0.0.1 ./shared_data/client2
+   java -cp bin client.ClientNode 127.0.0.1 <folder_path>
    ```
 3. **Usage inside ClientNode CLI:**
    Once the node starts, you can type commands:
@@ -79,15 +79,16 @@ If testing across different Wi-Fi networks, we recommend using **Tailscale** to 
         - **Machine 2 (Client Node):** `100.64.0.2`
 
 2.  **On Machine 1 (Running the Directory Server):**
-    ```bash
-    # Use double quotes for the -D flag in PowerShell
+    ```powershell
+    # -Djava.rmi.server.hostname = IP of THIS machine (Machine 1)
     java "-Djava.rmi.server.hostname=100.64.0.1" -cp bin server.DirectoryServer
     ```
 
 3.  **On Machine 2 (Integrated P2P Node):**
-    ```bash
-    # Set hostname to Machine 2's IP and point to Machine 1's IP for Registry
-    java "-Djava.rmi.server.hostname=100.64.0.2" -cp bin client.ClientNode 100.64.0.1 ./shared_data/client2
+    ```powershell
+    # -Djava.rmi.server.hostname = IP of THIS machine (Machine 2)
+    # The last argument (100.64.0.1) = IP of the Directory Server (Machine 1)
+    java "-Djava.rmi.server.hostname=100.64.0.2" -cp bin client.ClientNode 100.64.0.1 <folder_path>
     ```
 
 4.  **Communication:**
