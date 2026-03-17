@@ -65,103 +65,77 @@ public class Download {
             int numWorkers = vettedSources.size();
             System.out.println("[System] Launching " + numWorkers + " parallel workers.");
 
-            // 2. Prepare files and Metadata
+            // 2. Prepare files
             File downloadDir = new File(downloadFolderPath);
-            if (!downloadDir.exists()) downloadDir.mkdirs();
-            
+            if (!downloadDir.exists())
+                downloadDir.mkdirs();
+
             File finalFile = new File(downloadDir, filename);
             File partFile = new File(downloadDir, filename + ".part");
-            File metaFile = new File(downloadDir, filename + ".part.meta");
-
-            boolean[] finishedChunks = new boolean[totalChunks];
-            boolean isResume = false;
 
             if (finalFile.exists()) {
                 System.out.println("Warning: " + filename + " already exists. Overwriting...");
-            } else if (partFile.exists() && metaFile.exists()) {
-                System.out.print("[System] Found partial download. Resume? (y/n): ");
-                Scanner sc = new Scanner(System.in);
-                if (sc.hasNextLine() && sc.nextLine().trim().toLowerCase().startsWith("y")) {
-                    finishedChunks = loadChunkMetadata(metaFile, fileSize, totalChunks);
-                    if (finishedChunks != null) {
-                        isResume = true;
-                        System.out.println("[System] Resuming from saved chunks...");
-                    } else {
-                        finishedChunks = new boolean[totalChunks];
-                        System.out.println("[System] Metadata mismatch. Starting fresh.");
-                    }
-                }
             }
 
             // 3. Setup Work Queue and Workers
             ConcurrentLinkedQueue<Integer> chunkQueue = new ConcurrentLinkedQueue<>();
-            long alreadyDownloaded = 0;
             for (int i = 0; i < totalChunks; i++) {
-                if (!finishedChunks[i]) {
-                    chunkQueue.add(i);
-                } else {
-                    alreadyDownloaded += Math.min(CHUNK_SIZE, fileSize - (long)i * CHUNK_SIZE);
-                }
+                chunkQueue.add(i);
             }
 
-            if (chunkQueue.isEmpty() && isResume) {
-                System.out.println("[System] All chunks already finished.");
-                finalizeFile(partFile, finalFile, metaFile);
-                return;
-            }
-
-            AtomicLong globalDownloaded = new AtomicLong(alreadyDownloaded);
+            AtomicLong globalDownloaded = new AtomicLong(0);
             long startTime = System.currentTimeMillis();
 
             try (RandomAccessFile partRaf = new RandomAccessFile(partFile, "rw")) {
-                if (!isResume) partRaf.setLength(fileSize);
+                partRaf.setLength(fileSize);
                 FileChannel sharedChannel = partRaf.getChannel();
 
                 FragmentDownloader[] workers = new FragmentDownloader[numWorkers];
                 for (int i = 0; i < numWorkers; i++) {
                     ClientInfo s = vettedSources.get(i);
-                    workers[i] = new FragmentDownloader(s.getIp(), s.getPort(), filename, sharedChannel, i, 
-                                                       chunkQueue, CHUNK_SIZE, fileSize, globalDownloaded);
+                    workers[i] = new FragmentDownloader(s.getIp(), s.getPort(), filename, sharedChannel, i,
+                            chunkQueue, CHUNK_SIZE, fileSize, globalDownloaded);
                     workers[i].start();
                 }
 
-                // Monitoring and auto-save loop
+                // Monitoring loop
                 while (true) {
                     boolean anyAlive = false;
                     for (FragmentDownloader w : workers) {
-                        if (w.isAlive()) anyAlive = true;
+                        if (w.isAlive())
+                            anyAlive = true;
                     }
 
                     printProgressBar(globalDownloaded.get(), fileSize, startTime);
-                    
-                    // Periodic meta save (simplified)
-                    saveChunkMetadata(metaFile, fileSize, finishedChunks, chunkQueue, totalChunks);
 
-                    if (!anyAlive && chunkQueue.isEmpty()) break;
+                    if (!anyAlive && chunkQueue.isEmpty())
+                        break;
                     if (!anyAlive && !chunkQueue.isEmpty()) {
-                        System.err.println("\n[Error] All workers died but work remains. Trying 1 final check...");
-                        break; 
+                        System.err.println("\n[Error] All workers died but work remains.");
+                        break;
                     }
                     Thread.sleep(200);
                 }
-                
+
                 System.out.println();
-                sharedChannel.force(true); 
+                sharedChannel.force(true);
             }
 
             // 4. Cleanup and Finish
-            finalizeFile(partFile, finalFile, metaFile);
+            long totalTime = System.currentTimeMillis() - startTime;
+            finalizeFile(partFile, finalFile, totalTime, fileSize);
 
         } catch (Exception e) {
             System.err.println("Download error: " + e.getMessage());
         }
     }
 
-    private static void finalizeFile(File part, File finalF, File meta) throws Exception {
+    private static void finalizeFile(File part, File finalF, long totalTimeMs, long totalSizeBytes) throws Exception {
         if (part.renameTo(finalF)) {
-            meta.delete();
-            System.out.println("------------------------------------------------");
+            System.out.println("\n------------------------------------------------");
             System.out.println("DOWNLOAD SUCCESSFUL!");
+            System.out.println(String.format("Total Time: %.2f seconds", totalTimeMs / 1000.0));
+            System.out.println(String.format("Total Size: %.2f MB", totalSizeBytes / 1024.0 / 1024.0));
             System.out.println("Saved to: " + finalF.getAbsolutePath());
             System.out.println("------------------------------------------------");
         } else {
@@ -169,27 +143,11 @@ public class Download {
         }
     }
 
-    private static void saveChunkMetadata(File metaFile, long fileSize, boolean[] finished, 
-                                         ConcurrentLinkedQueue<Integer> queue, int total) {
-        try (DataOutputStream dos = new DataOutputStream(new FileOutputStream(metaFile))) {
-            dos.writeLong(fileSize);
-            dos.writeInt(total);
-            // In a production app, we'd save the bitfield of 'finished' chunks here.
-        } catch (Exception ignored) {}
-    }
-
-    private static boolean[] loadChunkMetadata(File metaFile, long fileSize, int total) {
-        try (DataInputStream dis = new DataInputStream(new FileInputStream(metaFile))) {
-            if (dis.readLong() != fileSize) return null;
-            if (dis.readInt() != total) return null;
-            return new boolean[total]; 
-        } catch (Exception e) { return null; }
-    }
-
     private static List<ClientInfo> getVettedSources(List<ClientInfo> rawSources, String localIp) {
         List<ClientInfo> vetted = new ArrayList<>();
         for (ClientInfo s : rawSources) {
-            if (localIp != null && s.getIp().equals(localIp)) continue;
+            if (localIp != null && s.getIp().equals(localIp))
+                continue;
             try (Socket testSocket = new Socket()) {
                 testSocket.connect(new InetSocketAddress(s.getIp(), s.getPort()), 1000); // 1s timeout
                 vetted.add(s);
@@ -207,9 +165,12 @@ public class Download {
 
         StringBuilder sb = new StringBuilder("\rProgress: [");
         for (int i = 0; i < width; i++) {
-            if (i < completedWidth) sb.append("=");
-            else if (i == completedWidth) sb.append(">");
-            else sb.append(" ");
+            if (i < completedWidth)
+                sb.append("=");
+            else if (i == completedWidth)
+                sb.append(">");
+            else
+                sb.append(" ");
         }
 
         long elapsed = System.currentTimeMillis() - startTime;
