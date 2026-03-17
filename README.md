@@ -41,7 +41,7 @@ The `Download` client was upgraded to track the download speed (bytes/ms) of eac
 2. **Clean up and Compile:**
    ```bash
    # Windows
-   rmdir /s /q bin & mkdir bin
+   rm -r -fo bin ; mkdir bin
    javac -d bin src/shared/*.java src/server/*.java src/client/*.java
 
    # Linux/Mac
