@@ -85,7 +85,7 @@ public class FragmentDownloader extends Thread {
                 }
                 
                 if (totalRead == length) {
-                    System.out.println("[FragmentDownloader] Successfully downloaded fragment [offset=" + offset + ", length=" + totalRead + "].");
+                    System.out.println("[Thread " + sourceIndex + "] Finished fragment [" + offset + " -> " + (offset + length) + "] from " + targetIp + " (" + totalRead + " bytes)");
                     this.success = true;
                 }
             }

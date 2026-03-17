@@ -70,6 +70,13 @@ public class Download {
                 raf.setLength(fileSize);
             }
 
+            System.out.println("------------------------------------------------");
+            System.out.println("INITIATING PARALLEL DOWNLOAD");
+            System.out.println("File: " + filename);
+            System.out.println("Total Size: " + (fileSize / 1024.0 / 1024.0) + " MB (" + fileSize + " bytes)");
+            System.out.println("Sources: " + numSources);
+            System.out.println("------------------------------------------------");
+
             // 3. Calculate fragments and launch downloaders
             long fragmentSize = fileSize / numSources;
             FragmentDownloader[] downloaders = new FragmentDownloader[numSources];
@@ -82,7 +89,7 @@ public class Download {
                 long offset = i * fragmentSize;
                 int lengthToRead = (i == numSources - 1) ? (int) (fileSize - offset) : (int) fragmentSize;
 
-                System.out.println("Starting thread " + i + " -> Sub-Task [offset=" + offset + ", length=" + lengthToRead + "] from " + source);
+                System.out.println("[Control] Starting Thread " + i + ": Segment [" + offset + " -> " + (offset + lengthToRead) + "] from " + source.getIp());
                 
                 fragmentStartTimes[i] = System.currentTimeMillis();
                 downloaders[i] = new FragmentDownloader(source.getIp(), source.getPort(), filename, offset, lengthToRead, partFile.getAbsolutePath(), i);
@@ -129,11 +136,10 @@ public class Download {
                         
                         ClientInfo newSource = sources.get(bestSourceIndex);
 
-                        System.err.println("[Recovery] Fragment " + i + " failed/disconnected after " + downloaded + " bytes.");
-                        System.out.println("[Recovery] Resuming " + newLength + " remaining bytes from best source " + newSource + " (Rate: " + bestRate + " bytes/ms)");
+                        System.err.println("[Recovery] Thread " + i + " failed after " + downloaded + " bytes. Retrying remaining " + newLength + " bytes from " + newSource.getIp());
                         
                         fragmentStartTimes[i] = System.currentTimeMillis();
-                        downloaders[i] = new FragmentDownloader(newSource.getIp(), newSource.getPort(), filename, newOffset, newLength, partFile.getAbsolutePath(), bestSourceIndex);
+                        downloaders[i] = new FragmentDownloader(newSource.getIp(), newSource.getPort(), filename, newOffset, newLength, partFile.getAbsoluteFile().toString(), bestSourceIndex);
                         downloaders[i].start();
                     } else {
                         long duration = System.currentTimeMillis() - fragmentStartTimes[i];
@@ -149,13 +155,20 @@ public class Download {
             }
 
             long endTime = System.currentTimeMillis();
+            long totalTime = endTime - startTime;
             
             // 5. Finalizing: Rename .part to actual filename
             if (partFile.renameTo(finalFile)) {
-                System.out.println("Download complete! Time taken: " + (endTime - startTime) + " ms.");
-                System.out.println("File saved and verified: " + finalFile.getAbsolutePath());
+                System.out.println("------------------------------------------------");
+                System.out.println("DOWNLOAD SUCCESSFUL!");
+                System.out.println("Filename: " + filename);
+                System.out.println("Total Size: " + fileSize + " bytes");
+                System.out.println("Total Time: " + totalTime + " ms (" + (totalTime / 1000.0) + " seconds)");
+                System.out.println("Average Speed: " + String.format("%.2f", (fileSize / 1024.0) / (totalTime / 1000.0)) + " KB/s");
+                System.out.println("Saved to: " + finalFile.getAbsolutePath());
+                System.out.println("------------------------------------------------");
             } else {
-                throw new Exception("Failed to finalize file (rename error). Ensure no other process is holding the file.");
+                throw new Exception("Failed to finalize file (rename error).");
             }
 
         } catch (Exception e) {
