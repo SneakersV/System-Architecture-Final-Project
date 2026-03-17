@@ -5,128 +5,110 @@ import java.io.DataOutputStream;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.net.Socket;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * Thread that connects to a specific Daemon and downloads a specific part of a file.
+ * A worker thread that connects to a specific Daemon and processes chunks from a shared queue.
  */
 public class FragmentDownloader extends Thread {
 
     private String targetIp;
     private int targetPort;
     private String filename;
-    private long offset;
-    private int length;
     private FileChannel fileChannel;
     private int sourceIndex;
     
-    private boolean success = false;
-    private int bytesDownloaded = 0;
+    private ConcurrentLinkedQueue<Integer> chunkQueue;
+    private int chunkSize;
+    private long fileSize;
+    private AtomicLong globalDownloadedCounter;
+    
+    private boolean running = true;
+    private int chunksCompleted = 0;
+    private long bytesDownloadedInSession = 0;
 
-    // Support for persistent resume tracking
-    private long baseOffset;
-    private int baseLength;
-    private int previouslyDownloaded;
-
-    public FragmentDownloader(String targetIp, int targetPort, String filename, long offset, int length,
-            FileChannel fileChannel, int sourceIndex) {
+    public FragmentDownloader(String targetIp, int targetPort, String filename, FileChannel fileChannel, 
+                             int sourceIndex, ConcurrentLinkedQueue<Integer> chunkQueue, 
+                             int chunkSize, long fileSize, AtomicLong globalDownloadedCounter) {
         this.targetIp = targetIp;
         this.targetPort = targetPort;
         this.filename = filename;
-        this.offset = offset;
-        this.length = length;
         this.fileChannel = fileChannel;
         this.sourceIndex = sourceIndex;
+        this.chunkQueue = chunkQueue;
+        this.chunkSize = chunkSize;
+        this.fileSize = fileSize;
+        this.globalDownloadedCounter = globalDownloadedCounter;
     }
 
-    public void setBaseInfo(long baseOffset, int baseLength, int previouslyDownloaded) {
-        this.baseOffset = baseOffset;
-        this.baseLength = baseLength;
-        this.previouslyDownloaded = previouslyDownloaded;
-    }
-
-    public long getBaseOffset() { return baseOffset; }
-    public int getBaseLength() { return baseLength; }
-    public int getPreviouslyDownloaded() { return previouslyDownloaded; }
-
-    public long getTotalBytesCompleted() {
-        return previouslyDownloaded + bytesDownloaded;
-    }
-
-    public void markSuccess() {
-        this.success = true;
-    }
-
-    public boolean success() { return success; } // Renamed for clarity if needed, keeping isSuccess for compatibility
-    public boolean isSuccess() { return success; }
-    public int getBytesDownloaded() { return bytesDownloaded; }
-    public long getOffset() { return offset; }
-    public int getLength() { return length; }
     public int getSourceIndex() { return sourceIndex; }
+    public boolean isSuccess() { return !running; } // If it finished its loop naturally
+    public long getBytesDownloaded() { return bytesDownloadedInSession; }
+    public int getChunksCompleted() { return chunksCompleted; }
 
     @Override
     public void run() {
-        Socket socket = null;
         try {
-            // 1. Establish TCP connection to the specific Daemon
-            socket = new Socket(targetIp, targetPort);
-            
+            while (true) {
+                Integer chunkIdx = chunkQueue.poll();
+                if (chunkIdx == null) break; // No more work
+
+                if (!downloadChunk(chunkIdx)) {
+                    // Put back for retry by another thread if this source failed
+                    chunkQueue.add(chunkIdx);
+                    throw new Exception("Source failed during chunk " + chunkIdx);
+                }
+                chunksCompleted++;
+            }
+        } catch (Exception e) {
+            System.err.println("[Worker " + sourceIndex + "] Stopped: " + e.getMessage());
+        } finally {
+            running = false;
+        }
+    }
+
+    private boolean downloadChunk(int chunkIdx) {
+        long offset = (long) chunkIdx * chunkSize;
+        int length = (int) Math.min(chunkSize, fileSize - offset);
+
+        try (Socket socket = new Socket(targetIp, targetPort)) {
+            socket.setSoTimeout(5000); // 5s read timeout
             DataOutputStream dos = new DataOutputStream(socket.getOutputStream());
             DataInputStream dis = new DataInputStream(socket.getInputStream());
 
-            // 2. Request the fragment
+            // 1. Request
             dos.writeUTF(filename);
             dos.writeLong(offset);
             dos.writeInt(length);
             dos.flush();
 
-            // 3. Verify success status from server
-            int status = dis.readInt();
-            if (status == -1) {
-                System.err.println("[Thread " + sourceIndex + "] Error: Daemon could not find the file.");
-                return;
-            }
+            // 2. Status
+            if (dis.readInt() == -1) return false;
 
-            // 4. Read bytes and write them to the specific offset in the local file
-            // Using FileChannel.write(ByteBuffer, position) is thread-safe and positional.
+            // 3. Data Transfer
             byte[] buffer = new byte[8192];
             int totalRead = 0;
-            
             while (totalRead < length) {
-                int remaining = length - totalRead;
-                int readSize = Math.min(buffer.length, remaining);
-                
-                int bytesRead = dis.read(buffer, 0, readSize);
-                if (bytesRead == -1) {
-                    System.err.println("[Thread " + sourceIndex + "] Error: Connection closed prematurely by Daemon.");
-                    break;
-                }
+                int bytesRead = dis.read(buffer, 0, Math.min(buffer.length, length - totalRead));
+                if (bytesRead == -1) return false;
 
-                // Wrap buffer into ByteBuffer and write at the specific position
                 ByteBuffer byteBuffer = ByteBuffer.wrap(buffer, 0, bytesRead);
                 while (byteBuffer.hasRemaining()) {
-                    // Position-based write DOES NOT move the channel's global position
                     fileChannel.write(byteBuffer, offset + totalRead);
                 }
 
                 totalRead += bytesRead;
-                this.bytesDownloaded = totalRead;
+                bytesDownloadedInSession += bytesRead;
+                globalDownloadedCounter.addAndGet(bytesRead);
             }
-            
-            if (totalRead == length) {
-                System.out.println("[Thread " + sourceIndex + "] Finished fragment [" + offset + " -> " + (offset + length) + "] from " + targetIp + " (" + totalRead + " bytes)");
-                this.success = true;
-            }
-
+            return true;
         } catch (Exception e) {
-            System.err.println("[Thread " + sourceIndex + "] Exception from " + targetIp + ":" + targetPort + " -> " + e.getMessage());
-        } finally {
-            try {
-                if (socket != null && !socket.isClosed()) {
-                    socket.close();
-                }
-            } catch (Exception e) {
-                // Ignore
-            }
+            return false;
         }
     }
+
+    // Compatibility methods for Download.java during transition
+    public long getTotalBytesCompleted() { return bytesDownloadedInSession; } // This now represents session progress
+    public void markSuccess() { running = false; }
 }
