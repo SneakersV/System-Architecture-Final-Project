@@ -1,7 +1,7 @@
 package shared;
 
 import java.io.Serializable;
-import java.util.ArrayList;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.List;
 
 /**
@@ -14,12 +14,12 @@ public class FileInfo implements Serializable {
     
     private String filename;
     private long fileSize;
-    private List<ClientInfo> clients;
+    private CopyOnWriteArrayList<ClientInfo> clients;
 
     public FileInfo(String filename, long fileSize) {
         this.filename = filename;
         this.fileSize = fileSize;
-        this.clients = new ArrayList<>();
+        this.clients = new CopyOnWriteArrayList<>();
     }
 
     public String getFilename() {
@@ -35,12 +35,9 @@ public class FileInfo implements Serializable {
     }
 
     public void addClient(ClientInfo client) {
-        // Prevent duplicate clients
-        for (ClientInfo c : clients) {
-            if (c.getIp().equals(client.getIp()) && c.getPort() == client.getPort()) {
-                return;
-            }
+        // CopyOnWriteArrayList.addIfAbsent is perfect here, but let's keep the logic clear
+        if (!clients.contains(client)) {
+            clients.add(client);
         }
-        this.clients.add(client);
     }
 }

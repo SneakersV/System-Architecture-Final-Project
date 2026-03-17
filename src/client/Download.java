@@ -7,6 +7,7 @@ import shared.Directory;
 import shared.FileInfo;
 import java.io.File;
 import java.io.RandomAccessFile;
+import java.nio.channels.FileChannel;
 
 /**
  * The Download client.
@@ -65,98 +66,103 @@ public class Download {
                 System.out.println("Warning: " + filename + " already exists. Overwriting...");
             }
 
-            // Create/truncate the part file to the exact size
-            try (RandomAccessFile raf = new RandomAccessFile(partFile, "rw")) {
-                raf.setLength(fileSize);
-            }
-
-            System.out.println("------------------------------------------------");
-            System.out.println("INITIATING PARALLEL DOWNLOAD");
-            System.out.println("File: " + filename);
-            System.out.println("Total Size: " + (fileSize / 1024.0 / 1024.0) + " MB (" + fileSize + " bytes)");
-            System.out.println("Sources: " + numSources);
-            System.out.println("------------------------------------------------");
-
-            // 3. Calculate fragments and launch downloaders
-            long fragmentSize = fileSize / numSources;
-            FragmentDownloader[] downloaders = new FragmentDownloader[numSources];
-            long[] fragmentStartTimes = new long[numSources];
-            
             long startTime = System.currentTimeMillis();
+            long totalTime = 0;
 
-            for (int i = 0; i < numSources; i++) {
-                ClientInfo source = sources.get(i);
-                long offset = i * fragmentSize;
-                int lengthToRead = (i == numSources - 1) ? (int) (fileSize - offset) : (int) fragmentSize;
+            // Create/truncate the part file to the exact size
+            // Using try-with-resources for the main file to ensure it's closed before renaming
+            try (RandomAccessFile partRaf = new RandomAccessFile(partFile, "rw")) {
+                partRaf.setLength(fileSize);
+                FileChannel sharedChannel = partRaf.getChannel();
 
-                System.out.println("[Control] Starting Thread " + i + ": Segment [" + offset + " -> " + (offset + lengthToRead) + "] from " + source.getIp());
+                System.out.println("------------------------------------------------");
+                System.out.println("INITIATING PARALLEL DOWNLOAD");
+                System.out.println("File: " + filename);
+                System.out.println("Total Size: " + (fileSize / 1024.0 / 1024.0) + " MB (" + fileSize + " bytes)");
+                System.out.println("Sources: " + numSources);
+                System.out.println("------------------------------------------------");
+
+                // 3. Calculate fragments and launch downloaders
+                long fragmentSize = fileSize / numSources;
+                FragmentDownloader[] downloaders = new FragmentDownloader[numSources];
+                long[] fragmentStartTimes = new long[numSources];
                 
-                fragmentStartTimes[i] = System.currentTimeMillis();
-                downloaders[i] = new FragmentDownloader(source.getIp(), source.getPort(), filename, offset, lengthToRead, partFile.getAbsolutePath(), i);
-                downloaders[i].start();
-            }
-
-            // 4. Monitor and handle failures (Adaptive resume)
-            boolean allDone = false;
-            int[] retryCounts = new int[numSources];
-            long[] performanceMetrics = new long[numSources];
-
-            while (!allDone) {
-                allDone = true;
                 for (int i = 0; i < numSources; i++) {
-                    FragmentDownloader fd = downloaders[i];
+                    ClientInfo source = sources.get(i);
+                    long offset = i * fragmentSize;
+                    int lengthToRead = (i == numSources - 1) ? (int) (fileSize - offset) : (int) fragmentSize;
+
+                    System.out.println("[Control] Starting Thread " + i + ": Segment [" + offset + " -> " + (offset + lengthToRead) + "] from " + source.getIp());
                     
-                    if (fd.isAlive()) {
-                        allDone = false;
-                    } 
-                    else if (!fd.isSuccess()) {
-                        allDone = false; 
+                    fragmentStartTimes[i] = System.currentTimeMillis();
+                    downloaders[i] = new FragmentDownloader(source.getIp(), source.getPort(), filename, offset, lengthToRead, sharedChannel, i);
+                    downloaders[i].start();
+                }
+
+                // 4. Monitor and handle failures (Adaptive resume)
+                boolean allDone = false;
+                int[] retryCounts = new int[numSources];
+                long[] performanceMetrics = new long[numSources];
+
+                while (!allDone) {
+                    allDone = true;
+                    for (int i = 0; i < numSources; i++) {
+                        FragmentDownloader fd = downloaders[i];
                         
-                        retryCounts[i]++;
-                        if (retryCounts[i] > 10) {
-                            throw new Exception("Fragment " + i + " failed 10 times. Aborting download.");
-                        }
+                        if (fd.isAlive()) {
+                            allDone = false;
+                        } 
+                        else if (!fd.isSuccess()) {
+                            allDone = false; 
+                            
+                            retryCounts[i]++;
+                            if (retryCounts[i] > 10) {
+                                throw new Exception("Fragment " + i + " failed 10 times. Aborting download.");
+                            }
 
-                        int downloaded = fd.getBytesDownloaded();
-                        long newOffset = fd.getOffset() + downloaded;
-                        int newLength = fd.getLength() - downloaded;
+                            int downloaded = fd.getBytesDownloaded();
+                            long newOffset = fd.getOffset() + downloaded;
+                            int newLength = fd.getLength() - downloaded;
 
-                        int bestSourceIndex = 0;
-                        long bestRate = -1;
-                        for (int s = 0; s < numSources; s++) {
-                            if (performanceMetrics[s] > bestRate) {
-                                bestRate = performanceMetrics[s];
-                                bestSourceIndex = s;
+                            int bestSourceIndex = 0;
+                            long bestRate = -1;
+                            for (int s = 0; s < numSources; s++) {
+                                if (performanceMetrics[s] > bestRate) {
+                                    bestRate = performanceMetrics[s];
+                                    bestSourceIndex = s;
+                                }
+                            }
+                            
+                            if (bestRate <= 0) {
+                                bestSourceIndex = (fd.getSourceIndex() + 1) % sources.size();
+                            }
+                            
+                            ClientInfo newSource = sources.get(bestSourceIndex);
+
+                            System.err.println("[Recovery] Thread " + i + " failed after " + downloaded + " bytes. Retrying remaining " + newLength + " bytes from " + newSource.getIp());
+                            
+                            fragmentStartTimes[i] = System.currentTimeMillis();
+                            downloaders[i] = new FragmentDownloader(newSource.getIp(), newSource.getPort(), filename, newOffset, newLength, sharedChannel, bestSourceIndex);
+                            downloaders[i].start();
+                        } else {
+                            long duration = System.currentTimeMillis() - fragmentStartTimes[i];
+                            if (duration > 0) {
+                                performanceMetrics[fd.getSourceIndex()] = fd.getLength() / duration;
                             }
                         }
-                        
-                        if (bestRate <= 0) {
-                            bestSourceIndex = (fd.getSourceIndex() + 1) % sources.size();
-                        }
-                        
-                        ClientInfo newSource = sources.get(bestSourceIndex);
+                    }
 
-                        System.err.println("[Recovery] Thread " + i + " failed after " + downloaded + " bytes. Retrying remaining " + newLength + " bytes from " + newSource.getIp());
-                        
-                        fragmentStartTimes[i] = System.currentTimeMillis();
-                        downloaders[i] = new FragmentDownloader(newSource.getIp(), newSource.getPort(), filename, newOffset, newLength, partFile.getAbsoluteFile().toString(), bestSourceIndex);
-                        downloaders[i].start();
-                    } else {
-                        long duration = System.currentTimeMillis() - fragmentStartTimes[i];
-                        if (duration > 0) {
-                            performanceMetrics[fd.getSourceIndex()] = fd.getLength() / duration;
-                        }
+                    if (!allDone) {
+                        Thread.sleep(500); 
                     }
                 }
 
-                if (!allDone) {
-                    Thread.sleep(500); 
-                }
-            }
+                totalTime = System.currentTimeMillis() - startTime;
+                
+                // Close the channel implicitly by closing RAF then rename
+                sharedChannel.force(true); 
+            } // partRaf closes automatically here
 
-            long endTime = System.currentTimeMillis();
-            long totalTime = endTime - startTime;
-            
             // 5. Finalizing: Rename .part to actual filename
             if (partFile.renameTo(finalFile)) {
                 System.out.println("------------------------------------------------");

@@ -6,10 +6,10 @@ import java.util.concurrent.ConcurrentHashMap;
 import shared.ClientInfo;
 import shared.Directory;
 import shared.FileInfo;
-import java.util.Iterator;
 import java.util.Map;
 import java.util.Timer;
 import java.util.TimerTask;
+import java.nio.channels.FileChannel;
 
 /**
  * Implementation of the RMI Directory service.
@@ -57,7 +57,7 @@ public class DirectoryImpl extends UnicastRemoteObject implements Directory {
     }
 
     @Override
-    public FileInfo lookupFile(String filename) throws RemoteException {
+    public synchronized FileInfo lookupFile(String filename) throws RemoteException {
         FileInfo info = directoryCache.get(filename);
         if (info != null) {
             System.out.println("Lookup requested for " + filename + " -> Found " + info.getClients().size() + " sources.");
@@ -70,7 +70,6 @@ public class DirectoryImpl extends UnicastRemoteObject implements Directory {
     @Override
     public synchronized void heartBeat(ClientInfo client) throws RemoteException {
         clientHeartbeats.put(client, System.currentTimeMillis());
-        // System.out.println("Heartbeat received from " + client);
     }
 
     @Override
@@ -78,28 +77,28 @@ public class DirectoryImpl extends UnicastRemoteObject implements Directory {
         removeClientEverywhere(client);
     }
 
-    private void cleanupDeadClients() {
+    private synchronized void cleanupDeadClients() {
         long now = System.currentTimeMillis();
+        // Use a list to store clients to remove to avoid any iterator issues
+        java.util.List<ClientInfo> toRemove = new java.util.ArrayList<>();
+        
         for (Map.Entry<ClientInfo, Long> entry : clientHeartbeats.entrySet()) {
             if (now - entry.getValue() > HEARTBEAT_TIMEOUT) {
-                ClientInfo deadClient = entry.getKey();
-                System.out.println("Client timeout: " + deadClient + ". Removing from directory.");
-                removeClientEverywhere(deadClient);
+                toRemove.add(entry.getKey());
             }
+        }
+
+        for (ClientInfo deadClient : toRemove) {
+            System.out.println("Client timeout: " + deadClient + ". Removing from directory.");
+            removeClientEverywhere(deadClient);
         }
     }
 
-    private synchronized void removeClientEverywhere(ClientInfo client) {
+    private void removeClientEverywhere(ClientInfo client) {
         clientHeartbeats.remove(client);
         // Remove client from all FileInfo entries
-        Iterator<FileInfo> it = directoryCache.values().iterator();
-        while (it.hasNext()) {
-            FileInfo info = it.next();
+        for (FileInfo info : directoryCache.values()) {
             info.getClients().remove(client);
-            if (info.getClients().isEmpty()) {
-                // Optional: remove file if no one has it
-                // it.remove(); 
-            }
         }
     }
 }

@@ -2,7 +2,8 @@ package client;
 
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
-import java.io.RandomAccessFile;
+import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
 import java.net.Socket;
 
 /**
@@ -15,22 +16,23 @@ public class FragmentDownloader extends Thread {
     private String filename;
     private long offset;
     private int length;
-    private String outputFilePath;
+    private FileChannel fileChannel;
     private int sourceIndex;
     
     private boolean success = false;
     private int bytesDownloaded = 0;
 
-    public FragmentDownloader(String targetIp, int targetPort, String filename, long offset, int length, String outputFilePath, int sourceIndex) {
+    public FragmentDownloader(String targetIp, int targetPort, String filename, long offset, int length, FileChannel fileChannel, int sourceIndex) {
         this.targetIp = targetIp;
         this.targetPort = targetPort;
         this.filename = filename;
         this.offset = offset;
         this.length = length;
-        this.outputFilePath = outputFilePath;
+        this.fileChannel = fileChannel;
         this.sourceIndex = sourceIndex;
     }
 
+    public boolean success() { return success; } // Renamed for clarity if needed, keeping isSuccess for compatibility
     public boolean isSuccess() { return success; }
     public int getBytesDownloaded() { return bytesDownloaded; }
     public long getOffset() { return offset; }
@@ -56,43 +58,43 @@ public class FragmentDownloader extends Thread {
             // 3. Verify success status from server
             int status = dis.readInt();
             if (status == -1) {
-                System.err.println("[FragmentDownloader] Error: Daemon could not find the file.");
+                System.err.println("[Thread " + sourceIndex + "] Error: Daemon could not find the file.");
                 return;
             }
 
             // 4. Read bytes and write them to the specific offset in the local file
-            // Each thread gets its own RandomAccessFile instance pointing to the same file 
-            // to avoid file pointer conflicts between threads.
-            try (RandomAccessFile raf = new RandomAccessFile(outputFilePath, "rw")) {
-                raf.seek(offset);
-
-                byte[] buffer = new byte[8192];
-                int totalRead = 0;
+            // Using FileChannel.write(ByteBuffer, position) is thread-safe and positional.
+            byte[] buffer = new byte[8192];
+            int totalRead = 0;
+            
+            while (totalRead < length) {
+                int remaining = length - totalRead;
+                int readSize = Math.min(buffer.length, remaining);
                 
-                while (totalRead < length) {
-                    int remaining = length - totalRead;
-                    int readSize = Math.min(buffer.length, remaining);
-                    
-                    int bytesRead = dis.read(buffer, 0, readSize);
-                    if (bytesRead == -1) {
-                        System.err.println("[FragmentDownloader] Error: Connection closed prematurely by Daemon.");
-                        break;
-                    }
+                int bytesRead = dis.read(buffer, 0, readSize);
+                if (bytesRead == -1) {
+                    System.err.println("[Thread " + sourceIndex + "] Error: Connection closed prematurely by Daemon.");
+                    break;
+                }
 
-                    raf.write(buffer, 0, bytesRead);
-                    totalRead += bytesRead;
-                    this.bytesDownloaded = totalRead;
+                // Wrap buffer into ByteBuffer and write at the specific position
+                ByteBuffer byteBuffer = ByteBuffer.wrap(buffer, 0, bytesRead);
+                while (byteBuffer.hasRemaining()) {
+                    // Position-based write DOES NOT move the channel's global position
+                    fileChannel.write(byteBuffer, offset + totalRead);
                 }
-                
-                if (totalRead == length) {
-                    System.out.println("[Thread " + sourceIndex + "] Finished fragment [" + offset + " -> " + (offset + length) + "] from " + targetIp + " (" + totalRead + " bytes)");
-                    this.success = true;
-                }
+
+                totalRead += bytesRead;
+                this.bytesDownloaded = totalRead;
+            }
+            
+            if (totalRead == length) {
+                System.out.println("[Thread " + sourceIndex + "] Finished fragment [" + offset + " -> " + (offset + length) + "] from " + targetIp + " (" + totalRead + " bytes)");
+                this.success = true;
             }
 
         } catch (Exception e) {
-            System.err.println("[FragmentDownloader] Exception while downloading from " + targetIp + ":" + targetPort + " -> " + e.getMessage());
-            e.printStackTrace();
+            System.err.println("[Thread " + sourceIndex + "] Exception from " + targetIp + ":" + targetPort + " -> " + e.getMessage());
         } finally {
             try {
                 if (socket != null && !socket.isClosed()) {
