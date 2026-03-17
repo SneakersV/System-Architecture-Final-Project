@@ -54,20 +54,19 @@ The `Download` client was upgraded to track the download speed (bytes/ms) of eac
    ```bash
    java -cp bin server.DirectoryServer
    ```
-2. **Start the Daemons (Sources):**
-   *(Open separate terminals for each source)*
+2. **Start Integrated P2P Client Nodes:**
+   *(Open separate terminals for each node)*
    ```bash
-   # Terminal for Source 1 (port will be assigned automatically)
-   java -cp bin client.Daemon 127.0.0.1 ./shared_data/client1
+   # Terminal for Node 1
+   java -cp bin client.ClientNode 127.0.0.1 ./shared_data/client1
 
-   # Terminal for Source 2
-   java -cp bin client.Daemon 127.0.0.1 ./shared_data/client2
+   # Terminal for Node 2
+   java -cp bin client.ClientNode 127.0.0.1 ./shared_data/client2
    ```
-3. **Start the Download Client:**
-   ```bash
-   # Terminal for Download Client. (Download file into folder downloads)
-   java -cp bin client.Download <filename> 127.0.0.1 ./downloads
-   ```
+3. **Usage inside ClientNode CLI:**
+   Once the node starts, you can type commands:
+   - `download <filename>`: Example: `download large_file.dat`
+   - `exit`: To stop the node.
 
 ### 3.3 Scenario B: Running on Multiple Machines (LAN/Internet)
 This system requires Java RMI and TCP Sockets. When running on separate machines, you must explicitly set the `java.rmi.server.hostname` property.
@@ -76,15 +75,7 @@ This system requires Java RMI and TCP Sockets. When running on separate machines
    - Use `ipconfig` (Windows) or `ip a` (Linux/Mac) to find the IPv4 address of each machine.
    - *Example: Server IP = `192.168.1.5`, Daemon A IP = `192.168.1.10`.*
 
-2. **On Machine 1 (Directory Server):**
+3. **On Machine 2 (Integrated P2P Node):**
    ```bash
-   java -Djava.rmi.server.hostname=192.168.1.5 -cp bin server.DirectoryServer
-   ```
-3. **On Machine 2 (Daemon Server):**
-   ```bash
-   java -Djava.rmi.server.hostname=192.168.1.10 -cp bin client.Daemon 192.168.1.5 ./src/shared_folder
-   ```
-4. **On Machine 3 (Download Client):**
-   ```bash
-   java -cp bin client.Download <filename> 192.168.1.5 ./downloads
+   java -Djava.rmi.server.hostname=192.168.1.10 -cp bin client.ClientNode 192.168.1.5 ./shared_folder
    ```
